@@ -2,7 +2,7 @@
 
 ## Bug Fixes
 
-- [ ] When you click and drag a table on the canvas, the table jumps to align the top left of the table with the cursor. We want it so wherever the user clicked the table initially is the point that will follow 1:1 with the cursor as they drag it
+- [x] When you click and drag a table on the canvas, the table jumps to align the top left of the table with the cursor. We want it so wherever the user clicked the table initially is the point that will follow 1:1 with the cursor as they drag it
 
 ## MVP Tasks
 
@@ -35,7 +35,7 @@
 
 ### Relations (Basic)
 - [x] Draw relation lines between tables
-- [ ] Implement crow's foot notation
+- [x] Implement crow's foot notation
 - [x] Update lines when tables move
 
 ### UI/UX Polish (Basic)

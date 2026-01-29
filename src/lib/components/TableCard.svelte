@@ -5,7 +5,7 @@
 		table: Table;
 		selected?: boolean;
 		onSelect?: () => void;
-		onDragStart?: () => void;
+		onDragStart?: (e: MouseEvent) => void;
 	}
 
 	let { table, selected = false, onSelect, onDragStart }: Props = $props();
@@ -14,7 +14,7 @@
 		if (e.button === 0) {
 			// Left click
 			onSelect?.();
-			onDragStart?.();
+			onDragStart?.(e);
 		}
 	}
 

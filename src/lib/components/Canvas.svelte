@@ -32,6 +32,7 @@
 	let isPanning = $state(false);
 	let dragTableId: string | null = $state(null);
 	let lastMousePos = $state({ x: 0, y: 0 });
+	let dragOffset = $state({ x: 0, y: 0 }); // Offset from table position to click point
 
 	// Grid configuration
 	const GRID_SIZE = 20;
@@ -59,7 +60,17 @@
 	}
 
 	// Handle mouse down on table
-	function handleTableDragStart(tableId: string) {
+	function handleTableDragStart(tableId: string, e: MouseEvent) {
+		const table = tables.find(t => t.id === tableId);
+		if (!table) return;
+
+		const worldPos = screenToWorld(e.clientX, e.clientY);
+		// Store the offset from table position to click point
+		dragOffset = {
+			x: worldPos.x - table.position.x,
+			y: worldPos.y - table.position.y
+		};
+
 		isDragging = true;
 		dragTableId = tableId;
 	}
@@ -73,7 +84,11 @@
 			lastMousePos = { x: e.clientX, y: e.clientY };
 		} else if (isDragging && dragTableId) {
 			const worldPos = screenToWorld(e.clientX, e.clientY);
-			onTableMove?.(dragTableId, { x: worldPos.x, y: worldPos.y });
+			// Subtract the offset so the click point follows the cursor
+			onTableMove?.(dragTableId, {
+				x: worldPos.x - dragOffset.x,
+				y: worldPos.y - dragOffset.y
+			});
 		}
 	}
 
@@ -91,6 +106,51 @@
 		onZoom?.(factor, e.clientX, e.clientY);
 	}
 
+	// Calculate intersection point of line with table rectangle edge
+	function getTableEdgePoint(
+		tableX: number,
+		tableY: number,
+		tableWidth: number,
+		tableHeight: number,
+		dirX: number,
+		dirY: number,
+		isStart: boolean
+	): { x: number; y: number } {
+		const centerX = tableX + tableWidth / 2;
+		const centerY = tableY + tableHeight / 2;
+		const halfWidth = tableWidth / 2;
+		const halfHeight = tableHeight / 2;
+
+		// Determine which edge the line intersects
+		// Calculate intersection with all four edges and pick the closest
+		let edgeX = centerX;
+		let edgeY = centerY;
+		const margin = 15; // Margin for the marker
+
+		// For start point, we go in the direction; for end point, we go opposite
+		const d = isStart ? 1 : -1;
+		const dx = dirX * d;
+		const dy = dirY * d;
+
+		// Calculate which edge is hit based on the angle
+		// Time to hit vertical edges (left/right)
+		const tVertical = dx !== 0 ? halfWidth / Math.abs(dx) : Infinity;
+		// Time to hit horizontal edges (top/bottom)
+		const tHorizontal = dy !== 0 ? halfHeight / Math.abs(dy) : Infinity;
+
+		if (tVertical < tHorizontal) {
+			// Hits vertical edge (left or right)
+			edgeX = centerX + (dx > 0 ? halfWidth + margin : -halfWidth - margin);
+			edgeY = centerY + dy * tVertical;
+		} else {
+			// Hits horizontal edge (top or bottom)
+			edgeX = centerX + dx * tHorizontal;
+			edgeY = centerY + (dy > 0 ? halfHeight + margin : -halfHeight - margin);
+		}
+
+		return { x: edgeX, y: edgeY };
+	}
+
 	// Calculate relation path between two tables
 	function getRelationPath(relation: Relation): string {
 		const fromTable = tables.find(t => t.id === relation.from.tableId);
@@ -98,14 +158,67 @@
 
 		if (!fromTable || !toTable) return '';
 
-		// Simple center-to-center connection for now
-		const fromX = fromTable.position.x + 110; // Center of table
-		const fromY = fromTable.position.y + 36 + (fromTable.columns.length * 28) / 2;
-		const toX = toTable.position.x + 110;
-		const toY = toTable.position.y + 36 + (toTable.columns.length * 28) / 2;
+		// Table dimensions
+		const tableWidth = 220;
+		const getTableHeight = (table: Table) => (table.columns.length + 1) * 28 + 16;
+		const fromHeight = getTableHeight(fromTable);
+		const toHeight = getTableHeight(toTable);
 
-		// Simple straight line for now (can be replaced with bezier curves)
-		return `M ${fromX} ${fromY} L ${toX} ${toY}`;
+		// Calculate center points
+		const fromCenterX = fromTable.position.x + tableWidth / 2;
+		const fromCenterY = fromTable.position.y + fromHeight / 2;
+		const toCenterX = toTable.position.x + tableWidth / 2;
+		const toCenterY = toTable.position.y + toHeight / 2;
+
+		// Calculate direction vector
+		const dx = toCenterX - fromCenterX;
+		const dy = toCenterY - fromCenterY;
+		const length = Math.sqrt(dx * dx + dy * dy);
+
+		if (length === 0) return '';
+
+		// Normalize direction
+		const dirX = dx / length;
+		const dirY = dy / length;
+
+		// Get edge points for both tables
+		const fromPoint = getTableEdgePoint(
+			fromTable.position.x,
+			fromTable.position.y,
+			tableWidth,
+			fromHeight,
+			dirX,
+			dirY,
+			true
+		);
+
+		const toPoint = getTableEdgePoint(
+			toTable.position.x,
+			toTable.position.y,
+			tableWidth,
+			toHeight,
+			dirX,
+			dirY,
+			false
+		);
+
+		return `M ${fromPoint.x} ${fromPoint.y} L ${toPoint.x} ${toPoint.y}`;
+	}
+
+	// Get marker IDs based on relation type
+	function getMarkers(relation: Relation): { start: string, end: string } {
+		switch (relation.type) {
+			case 'one-to-one':
+				return { start: 'url(#one-marker)', end: 'url(#one-marker)' };
+			case 'one-to-many':
+				return { start: 'url(#one-marker)', end: 'url(#many-marker)' };
+			case 'many-to-one':
+				return { start: 'url(#many-marker)', end: 'url(#one-marker)' };
+			case 'many-to-many':
+				return { start: 'url(#many-marker)', end: 'url(#many-marker)' };
+			default:
+				return { start: '', end: 'url(#one-marker)' };
+		}
 	}
 </script>
 
@@ -142,12 +255,14 @@
 		<g transform={getTransform()}>
 			<!-- Relations -->
 			{#each relations as relation}
+				{@const markers = getMarkers(relation)}
 				<path
 					d={getRelationPath(relation)}
 					stroke="#9ca3af"
 					stroke-width="2"
 					fill="none"
-					marker-end="url(#arrowhead)"
+					marker-start={markers.start}
+					marker-end={markers.end}
 				/>
 			{/each}
 
@@ -157,22 +272,35 @@
 					table={table}
 					selected={table.id === selectedTableId}
 					onSelect={() => onSelectTable?.(table.id)}
-					onDragStart={() => handleTableDragStart(table.id)}
+					onDragStart={(e) => handleTableDragStart(table.id, e)}
 				/>
 			{/each}
 		</g>
 
-		<!-- Arrow marker for relations -->
+		<!-- Crow's foot notation markers for relations -->
 		<defs>
+			<!-- One (mandatory) - perpendicular line -->
 			<marker
-				id="arrowhead"
-				markerWidth="10"
-				markerHeight="7"
-				refX="9"
-				refY="3.5"
+				id="one-marker"
+				markerWidth="12"
+				markerHeight="12"
+				refX="6"
+				refY="6"
 				orient="auto"
 			>
-				<polygon points="0 0, 10 3.5, 0 7" fill="#9ca3af" />
+				<line x1="6" y1="2" x2="6" y2="10" stroke="#9ca3af" stroke-width="2" />
+			</marker>
+
+			<!-- Many - crow's foot -->
+			<marker
+				id="many-marker"
+				markerWidth="16"
+				markerHeight="12"
+				refX="8"
+				refY="6"
+				orient="auto"
+			>
+				<path d="M 8 6 L 0 2 M 8 6 L 0 6 M 8 6 L 0 10" stroke="#9ca3af" stroke-width="2" fill="none" />
 			</marker>
 		</defs>
 	</svg>
