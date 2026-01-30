@@ -106,103 +106,129 @@
 		onZoom?.(factor, e.clientX, e.clientY);
 	}
 
-	// Calculate intersection point of line with table rectangle edge
-	function getTableEdgePoint(
-		tableX: number,
-		tableY: number,
-		tableWidth: number,
-		tableHeight: number,
-		dirX: number,
-		dirY: number,
-		isStart: boolean
-	): { x: number; y: number } {
-		const centerX = tableX + tableWidth / 2;
-		const centerY = tableY + tableHeight / 2;
-		const halfWidth = tableWidth / 2;
-		const halfHeight = tableHeight / 2;
+	// Table dimensions constants
+	const TABLE_WIDTH = 220;
+	const MARGIN = 20; // Distance from table edge before first bend
 
-		// Determine which edge the line intersects
-		// Calculate intersection with all four edges and pick the closest
-		let edgeX = centerX;
-		let edgeY = centerY;
-		const margin = 15; // Margin for the marker
-
-		// For start point, we go in the direction; for end point, we go opposite
-		const d = isStart ? 1 : -1;
-		const dx = dirX * d;
-		const dy = dirY * d;
-
-		// Calculate which edge is hit based on the angle
-		// Time to hit vertical edges (left/right)
-		const tVertical = dx !== 0 ? halfWidth / Math.abs(dx) : Infinity;
-		// Time to hit horizontal edges (top/bottom)
-		const tHorizontal = dy !== 0 ? halfHeight / Math.abs(dy) : Infinity;
-
-		if (tVertical < tHorizontal) {
-			// Hits vertical edge (left or right)
-			edgeX = centerX + (dx > 0 ? halfWidth + margin : -halfWidth - margin);
-			edgeY = centerY + dy * tVertical;
-		} else {
-			// Hits horizontal edge (top or bottom)
-			edgeX = centerX + dx * tHorizontal;
-			edgeY = centerY + (dy > 0 ? halfHeight + margin : -halfHeight - margin);
-		}
-
-		return { x: edgeX, y: edgeY };
+	// Get table height based on columns
+	function getTableHeight(table: Table): number {
+		return (table.columns.length + 1) * 28 + 16;
 	}
 
-	// Calculate relation path between two tables
+	// Get table bounding box
+	function getTableBounds(table: Table): { left: number; right: number; top: number; bottom: number; centerX: number; centerY: number } {
+		const height = getTableHeight(table);
+		return {
+			left: table.position.x,
+			right: table.position.x + TABLE_WIDTH,
+			top: table.position.y,
+			bottom: table.position.y + height,
+			centerX: table.position.x + TABLE_WIDTH / 2,
+			centerY: table.position.y + height / 2
+		};
+	}
+
+	// Determine the best edge to connect from based on relative positions
+	type Edge = 'left' | 'right' | 'top' | 'bottom';
+
+	function getBestEdges(fromBounds: ReturnType<typeof getTableBounds>, toBounds: ReturnType<typeof getTableBounds>): { fromEdge: Edge; toEdge: Edge } {
+		const dx = toBounds.centerX - fromBounds.centerX;
+		const dy = toBounds.centerY - fromBounds.centerY;
+
+		// Check for horizontal separation (tables side by side)
+		const horizontalGap = Math.abs(dx) - TABLE_WIDTH;
+		// Check for vertical separation (tables above/below)
+		const verticalGap = Math.abs(dy) - (fromBounds.bottom - fromBounds.top + toBounds.bottom - toBounds.top) / 2;
+
+		// Prefer horizontal connections if there's clear horizontal separation
+		if (horizontalGap > 0 && horizontalGap > verticalGap) {
+			if (dx > 0) {
+				return { fromEdge: 'right', toEdge: 'left' };
+			} else {
+				return { fromEdge: 'left', toEdge: 'right' };
+			}
+		}
+
+		// Prefer vertical connections if there's clear vertical separation
+		if (verticalGap > 0) {
+			if (dy > 0) {
+				return { fromEdge: 'bottom', toEdge: 'top' };
+			} else {
+				return { fromEdge: 'top', toEdge: 'bottom' };
+			}
+		}
+
+		// Tables overlap somewhat - use the larger delta
+		if (Math.abs(dx) > Math.abs(dy)) {
+			if (dx > 0) {
+				return { fromEdge: 'right', toEdge: 'left' };
+			} else {
+				return { fromEdge: 'left', toEdge: 'right' };
+			}
+		} else {
+			if (dy > 0) {
+				return { fromEdge: 'bottom', toEdge: 'top' };
+			} else {
+				return { fromEdge: 'top', toEdge: 'bottom' };
+			}
+		}
+	}
+
+	// Get anchor point on table edge
+	function getAnchorPoint(bounds: ReturnType<typeof getTableBounds>, edge: Edge): { x: number; y: number } {
+		switch (edge) {
+			case 'left':
+				return { x: bounds.left - MARGIN, y: bounds.centerY };
+			case 'right':
+				return { x: bounds.right + MARGIN, y: bounds.centerY };
+			case 'top':
+				return { x: bounds.centerX, y: bounds.top - MARGIN };
+			case 'bottom':
+				return { x: bounds.centerX, y: bounds.bottom + MARGIN };
+		}
+	}
+
+	// Calculate orthogonal path between two tables
 	function getRelationPath(relation: Relation): string {
 		const fromTable = tables.find(t => t.id === relation.from.tableId);
 		const toTable = tables.find(t => t.id === relation.to.tableId);
 
 		if (!fromTable || !toTable) return '';
 
-		// Table dimensions
-		const tableWidth = 220;
-		const getTableHeight = (table: Table) => (table.columns.length + 1) * 28 + 16;
-		const fromHeight = getTableHeight(fromTable);
-		const toHeight = getTableHeight(toTable);
+		const fromBounds = getTableBounds(fromTable);
+		const toBounds = getTableBounds(toTable);
 
-		// Calculate center points
-		const fromCenterX = fromTable.position.x + tableWidth / 2;
-		const fromCenterY = fromTable.position.y + fromHeight / 2;
-		const toCenterX = toTable.position.x + tableWidth / 2;
-		const toCenterY = toTable.position.y + toHeight / 2;
+		// Determine which edges to connect
+		const { fromEdge, toEdge } = getBestEdges(fromBounds, toBounds);
 
-		// Calculate direction vector
-		const dx = toCenterX - fromCenterX;
-		const dy = toCenterY - fromCenterY;
-		const length = Math.sqrt(dx * dx + dy * dy);
+		// Get anchor points
+		const fromPoint = getAnchorPoint(fromBounds, fromEdge);
+		const toPoint = getAnchorPoint(toBounds, toEdge);
 
-		if (length === 0) return '';
+		// Build orthogonal path based on edge combinations
+		// The path always starts horizontal or vertical from the edge, then bends once
+		const isFromHorizontal = fromEdge === 'left' || fromEdge === 'right';
+		const isToHorizontal = toEdge === 'left' || toEdge === 'right';
 
-		// Normalize direction
-		const dirX = dx / length;
-		const dirY = dy / length;
+		let path = `M ${fromPoint.x} ${fromPoint.y}`;
 
-		// Get edge points for both tables
-		const fromPoint = getTableEdgePoint(
-			fromTable.position.x,
-			fromTable.position.y,
-			tableWidth,
-			fromHeight,
-			dirX,
-			dirY,
-			true
-		);
+		if (isFromHorizontal && isToHorizontal) {
+			// Both horizontal edges - route with vertical middle segment
+			const midX = (fromPoint.x + toPoint.x) / 2;
+			path += ` H ${midX} V ${toPoint.y} H ${toPoint.x}`;
+		} else if (!isFromHorizontal && !isToHorizontal) {
+			// Both vertical edges - route with horizontal middle segment
+			const midY = (fromPoint.y + toPoint.y) / 2;
+			path += ` V ${midY} H ${toPoint.x} V ${toPoint.y}`;
+		} else if (isFromHorizontal && !isToHorizontal) {
+			// From horizontal, to vertical - single bend
+			path += ` H ${toPoint.x} V ${toPoint.y}`;
+		} else {
+			// From vertical, to horizontal - single bend
+			path += ` V ${toPoint.y} H ${toPoint.x}`;
+		}
 
-		const toPoint = getTableEdgePoint(
-			toTable.position.x,
-			toTable.position.y,
-			tableWidth,
-			toHeight,
-			dirX,
-			dirY,
-			false
-		);
-
-		return `M ${fromPoint.x} ${fromPoint.y} L ${toPoint.x} ${toPoint.y}`;
+		return path;
 	}
 
 	// Get marker IDs based on relation type
