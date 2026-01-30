@@ -5,7 +5,7 @@
 	"type": "module",
 	"scripts": {
 		"dev": "bun --bun run dev",
-    	"build": "bun --bun run build",
+    	"build": "vite build",
     	"start": "bun ./build/index.js",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
