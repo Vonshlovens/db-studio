@@ -1,0 +1,16 @@
+.git
+.github
+.claude
+.svelte-kit
+build
+node_modules
+data
+
+.env
+.env.*
+
+*.db
+*.db-*
+*.log
+
+.DS_Store
