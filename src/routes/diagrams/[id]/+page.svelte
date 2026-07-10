@@ -25,13 +25,23 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { generateDBML, parseDBML } from '$lib/dbml';
+	import {
+		GenerationGuard,
+		SaveCoordinator,
+		type SaveAttemptResult
+	} from '$lib/editor/async-control';
 	import { schemaStore } from '$lib/stores/schema.svelte';
 	import type { Table } from '$lib/types';
 
 	type LoadState = 'loading' | 'loaded' | 'error';
 	type SaveState = 'saved' | 'dirty' | 'saving' | 'error';
+	interface EditorSession {
+		id: string;
+		generation: number;
+		saves: SaveCoordinator;
+	}
 
-	const diagramId = page.params.id ?? '';
+	const diagramId = $derived(page.params.id ?? '');
 	let loadState = $state<LoadState>('loading');
 	let loadError = $state('');
 	let diagramName = $state('');
@@ -42,7 +52,8 @@
 	let lastSavedFingerprint = $state('');
 	let observedFingerprint = $state('');
 	let autosaveTimer: ReturnType<typeof setTimeout> | undefined;
-	let activeSave: Promise<boolean> | null = null;
+	const loadGenerations = new GenerationGuard();
+	let currentSession: EditorSession | null = null;
 	let allowNavigation = false;
 	let leaveDialogOpen = $state(false);
 	let pendingDestination = '/';
@@ -69,24 +80,28 @@
 		}
 	});
 
+	$effect(() => {
+		void loadDiagram(diagramId);
+	});
+
 	beforeNavigate(({ cancel, to }) => {
-		if (!hydrated || !dirty || allowNavigation || !to) return;
+		if (!needsSaveBeforeNavigation() || allowNavigation || !to) return;
 		cancel();
 		pendingDestination = to.url.href;
 		leaveDialogOpen = true;
 	});
 
 	onMount(() => {
-		void loadDiagram();
-
 		const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-			if (!dirty) return;
+			if (!needsSaveBeforeNavigation()) return;
 			event.preventDefault();
 			event.returnValue = '';
 		};
 		window.addEventListener('beforeunload', handleBeforeUnload);
 
 		return () => {
+			loadGenerations.begin();
+			currentSession = null;
 			hydrated = false;
 			clearAutosave();
 			window.removeEventListener('beforeunload', handleBeforeUnload);
@@ -101,13 +116,47 @@
 		});
 	}
 
-	async function loadDiagram() {
+	function hasUnsavedChanges(): boolean {
+		return hydrated && currentFingerprint() !== lastSavedFingerprint;
+	}
+
+	function needsSaveBeforeNavigation(): boolean {
+		return hasUnsavedChanges() || currentSession?.saves.isSaving === true;
+	}
+
+	function isCurrentSession(session: EditorSession): boolean {
+		return (
+			currentSession === session &&
+			loadGenerations.isCurrent(session.generation) &&
+			diagramId === session.id
+		);
+	}
+
+	async function loadDiagram(id: string) {
+		const generation = loadGenerations.begin();
+		let session: EditorSession;
+		const saves = new SaveCoordinator(() => performSave(session));
+		session = { id, generation, saves };
+		currentSession = session;
+
 		loadState = 'loading';
 		loadError = '';
 		hydrated = false;
+		dirty = false;
+		saveState = 'saved';
+		saveError = '';
+		diagramName = '';
+		lastSavedFingerprint = '';
+		observedFingerprint = '';
+		allowNavigation = false;
+		leaveDialogOpen = false;
 		clearAutosave();
+		schemaStore.clearSchema();
+
 		try {
-			const diagram = await getDiagram(diagramId);
+			const diagram = await getDiagram(id);
+			if (!isCurrentSession(session)) return;
+
 			diagramName = diagram.name;
 			schemaStore.loadPersistedState(diagram.schema, diagram.layout);
 			lastSavedFingerprint = currentFingerprint();
@@ -117,6 +166,7 @@
 			hydrated = true;
 			loadState = 'loaded';
 		} catch (error) {
+			if (!isCurrentSession(session)) return;
 			loadError = error instanceof Error ? error.message : 'Could not load this diagram.';
 			loadState = 'error';
 		}
@@ -124,8 +174,9 @@
 
 	function scheduleAutosave() {
 		clearAutosave();
+		const session = currentSession;
 		autosaveTimer = setTimeout(() => {
-			void saveDiagram();
+			if (session && isCurrentSession(session)) void saveDiagram(false, session);
 		}, 1200);
 	}
 
@@ -136,13 +187,19 @@
 		}
 	}
 
-	async function performSave(): Promise<boolean> {
-		if (!hydrated || !dirty) return true;
+	async function performSave(session: EditorSession): Promise<SaveAttemptResult> {
+		if (!hydrated || !isCurrentSession(session)) return 'stale';
+		if (currentFingerprint() === lastSavedFingerprint) {
+			dirty = false;
+			saveState = 'saved';
+			return 'saved';
+		}
+
 		const name = diagramName.trim();
 		if (!name) {
 			saveState = 'error';
 			saveError = 'Diagram name cannot be empty.';
-			return false;
+			return 'failed';
 		}
 
 		clearAutosave();
@@ -153,46 +210,61 @@
 		const requestFingerprint = JSON.stringify({ name, ...snapshot });
 
 		try {
-			const updated = await updateDiagram(diagramId, { name, ...snapshot });
+			const updated = await updateDiagram(session.id, { name, ...snapshot });
+			if (!isCurrentSession(session)) return 'stale';
+
 			if (diagramName === submittedName) diagramName = updated.name;
 			lastSavedFingerprint = requestFingerprint;
 			observedFingerprint = currentFingerprint();
 			dirty = observedFingerprint !== lastSavedFingerprint;
 			saveState = dirty ? 'dirty' : 'saved';
 			if (dirty) scheduleAutosave();
-			return true;
+			return dirty ? 'dirty' : 'saved';
 		} catch (error) {
+			if (!isCurrentSession(session)) return 'stale';
+
 			dirty = true;
 			saveState = 'error';
 			saveError = error instanceof Error ? error.message : 'Could not save your changes.';
-			return false;
+			return 'failed';
 		}
 	}
 
-	async function saveDiagram(): Promise<boolean> {
-		if (activeSave) return activeSave;
-		activeSave = performSave();
-		try {
-			return await activeSave;
-		} finally {
-			activeSave = null;
-		}
+	function saveDiagram(
+		ensureCurrent = false,
+		session = currentSession
+	): Promise<boolean> {
+		if (!session || !isCurrentSession(session)) return Promise.resolve(false);
+		return session.saves.request(ensureCurrent);
 	}
 
 	async function goToLibrary() {
+		const session = currentSession;
+		if (!session) return;
+
 		pendingDestination = '/';
-		if (dirty && !(await saveDiagram())) {
+		if (needsSaveBeforeNavigation() && !(await saveDiagram(true, session))) {
+			if (session !== currentSession) return;
 			leaveDialogOpen = true;
 			return;
 		}
-		await navigateToPendingDestination();
+		if (session === currentSession) await navigateToPendingDestination(session);
 	}
 
 	async function saveAndLeave() {
-		if (await saveDiagram()) await navigateToPendingDestination();
+		const session = currentSession;
+		if (!session) return;
+
+		if (await saveDiagram(true, session)) {
+			if (session === currentSession) await navigateToPendingDestination(session);
+		} else if (session === currentSession) {
+			leaveDialogOpen = true;
+		}
 	}
 
-	async function navigateToPendingDestination() {
+	async function navigateToPendingDestination(session: EditorSession) {
+		if (!isCurrentSession(session) || hasUnsavedChanges()) return;
+
 		allowNavigation = true;
 		leaveDialogOpen = false;
 		const destination = new URL(pendingDestination, window.location.href);
@@ -317,7 +389,7 @@
 					<ArrowLeft data-icon="inline-start" />
 					Library
 				</Button>
-				<Button onclick={loadDiagram}>Try again</Button>
+				<Button onclick={() => void loadDiagram(diagramId)}>Try again</Button>
 			</div>
 		</div>
 	</div>
@@ -416,6 +488,7 @@
 						viewport={schemaStore.viewport}
 						showGrid={schemaStore.layout.showGrid}
 						gridSize={schemaStore.layout.gridSize}
+						snapToGrid={schemaStore.layout.snapToGrid}
 						selectedTableId={schemaStore.ui.selectedTableId}
 						onPan={(dx, dy) => schemaStore.pan(dx, dy)}
 						onZoom={(factor, cx, cy) => schemaStore.zoom(factor, cx, cy)}
@@ -525,10 +598,10 @@
 		<AlertDialog.Footer>
 			<AlertDialog.Cancel>Keep editing</AlertDialog.Cancel>
 			<Button variant="ghost" onclick={discardAndLeave}>Discard changes</Button>
-			<AlertDialog.Action onclick={saveAndLeave}>
+			<Button onclick={() => void saveAndLeave()}>
 				{#if saveState === 'saving'}<LoaderCircle class="animate-spin" />{/if}
 				Save and leave
-			</AlertDialog.Action>
+			</Button>
 		</AlertDialog.Footer>
 	</AlertDialog.Content>
 </AlertDialog.Root>
