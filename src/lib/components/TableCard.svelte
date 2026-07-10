@@ -18,6 +18,13 @@
 		}
 	}
 
+	function handleKeyDown(e: KeyboardEvent) {
+		if (e.key === 'Enter' || e.key === ' ') {
+			e.preventDefault();
+			onSelect?.();
+		}
+	}
+
 	// Get constraint icons for a column
 	function getConstraintIcons(column: Table['columns'][0]): string {
 		const icons: string[] = [];
@@ -33,6 +40,11 @@
 	transform="translate({table.position.x}, {table.position.y})"
 	class:table-selected={selected}
 	style="cursor: move;"
+	onmousedown={handleMouseDown}
+	onkeydown={handleKeyDown}
+	role="button"
+	tabindex="0"
+	aria-label={`Select and move table ${table.name}`}
 >
 	<!-- Table background -->
 	<rect
@@ -40,11 +52,10 @@
 		y="0"
 		width="220"
 		height="{(table.columns.length + 1) * 28 + 16}"
-		fill="white"
-		stroke={selected ? '#3b82f6' : '#e5e7eb'}
+		fill="var(--canvas-card)"
+		stroke={selected ? 'var(--ring)' : table.color ?? 'var(--border)'}
 		stroke-width={selected ? '2' : '1'}
 		rx="6"
-		onmousedown={handleMouseDown}
 	/>
 
 	<!-- Table header -->
@@ -53,11 +64,14 @@
 		y="0"
 		width="220"
 		height="36"
-		fill={selected ? '#eff6ff' : '#f9fafb'}
-		stroke={selected ? '#3b82f6' : '#e5e7eb'}
+		fill={selected
+			? 'var(--canvas-card-selected)'
+			: table.color
+				? `color-mix(in oklab, ${table.color} 18%, var(--canvas-card-header))`
+				: 'var(--canvas-card-header)'}
+		stroke={selected ? 'var(--ring)' : table.color ?? 'var(--border)'}
 		stroke-width={selected ? '2' : '1'}
 		rx="6"
-		onmousedown={handleMouseDown}
 	/>
 
 	<!-- Table name -->
@@ -67,7 +81,7 @@
 		text-anchor="middle"
 		font-weight="600"
 		font-size="14"
-		fill="#111827"
+		fill="var(--canvas-text)"
 		pointer-events="none"
 	>
 		{table.name}
@@ -81,7 +95,7 @@
 				x="0"
 				y="18"
 				font-size="10"
-				fill="#6b7280"
+				fill="var(--canvas-muted)"
 				font-weight="500"
 			>
 				{getConstraintIcons(column)}
@@ -92,7 +106,7 @@
 				x="50"
 				y="18"
 				font-size="12"
-				fill="#374151"
+				fill="var(--canvas-text)"
 				font-weight={column.constraints.pk ? '600' : 'normal'}
 			>
 				{column.name}
@@ -103,7 +117,7 @@
 				x="160"
 				y="18"
 				font-size="11"
-				fill="#9ca3af"
+				fill="var(--canvas-muted)"
 				text-anchor="end"
 			>
 				{column.type}

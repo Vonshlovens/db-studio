@@ -17,15 +17,24 @@ import type {
 } from '$lib/types';
 import { DEFAULT_SCHEMA, DEFAULT_LAYOUT_STATE, DEFAULT_UI_STATE } from '$lib/types';
 
+export interface PersistenceSnapshot {
+	schema: Schema;
+	layout: LayoutState;
+}
+
+function clonePlain<T>(value: T): T {
+	return JSON.parse(JSON.stringify(value)) as T;
+}
+
 // ============================================================================
 // State Classes
 // ============================================================================
 
 class SchemaStore {
 	// Private state using Svelte 5 runes
-	#schema = $state<Schema>(DEFAULT_SCHEMA);
-	#layout = $state<LayoutState>(DEFAULT_LAYOUT_STATE);
-	#ui = $state<UIState>(DEFAULT_UI_STATE);
+	#schema = $state<Schema>(clonePlain(DEFAULT_SCHEMA));
+	#layout = $state<LayoutState>(clonePlain(DEFAULT_LAYOUT_STATE));
+	#ui = $state<UIState>(clonePlain(DEFAULT_UI_STATE));
 
 	// ============================================================================
 	// Getters
@@ -72,17 +81,43 @@ class SchemaStore {
 		this.#schema = schema;
 	}
 
+	loadPersistedState(schema: Schema, layout: LayoutState) {
+		const nextSchema = clonePlain(schema);
+		const nextLayout = clonePlain(layout);
+
+		for (const table of nextSchema.tables) {
+			const persistedPosition = nextLayout.tablePositions[table.id];
+			if (persistedPosition) table.position = clonePlain(persistedPosition);
+		}
+
+		this.#schema = nextSchema;
+		this.#layout = nextLayout;
+		this.resetTransientUI();
+	}
+
+	getPersistenceSnapshot(): PersistenceSnapshot {
+		return {
+			schema: clonePlain(this.#schema),
+			layout: clonePlain(this.#layout)
+		};
+	}
+
 	importParseResult(result: ParseResult) {
 		if (result.schema) {
 			this.#schema = result.schema;
 			// Initialize default positions for tables without positions
 			this.#initializePositions();
+			this.#layout.tablePositions = Object.fromEntries(
+				this.#schema.tables.map((table) => [table.id, clonePlain(table.position)])
+			);
+			this.resetTransientUI();
 		}
 	}
 
 	clearSchema() {
-		this.#schema = DEFAULT_SCHEMA;
-		this.#layout = DEFAULT_LAYOUT_STATE;
+		this.#schema = clonePlain(DEFAULT_SCHEMA);
+		this.#layout = clonePlain(DEFAULT_LAYOUT_STATE);
+		this.resetTransientUI();
 	}
 
 	// ============================================================================
@@ -91,6 +126,7 @@ class SchemaStore {
 
 	addTable(table: Table) {
 		this.#schema.tables.push(table);
+		this.#layout.tablePositions[table.id] = clonePlain(table.position);
 	}
 
 	updateTable(tableId: string, updates: Partial<Table>) {
@@ -102,6 +138,7 @@ class SchemaStore {
 
 	removeTable(tableId: string) {
 		this.#schema.tables = this.#schema.tables.filter(t => t.id !== tableId);
+		delete this.#layout.tablePositions[tableId];
 		// Also remove related relations
 		this.#schema.relations = this.#schema.relations.filter(
 			r => r.from.tableId !== tableId && r.to.tableId !== tableId
@@ -112,6 +149,7 @@ class SchemaStore {
 		const table = this.#schema.tables.find(t => t.id === tableId);
 		if (table) {
 			table.position = position;
+			this.#layout.tablePositions[tableId] = clonePlain(position);
 		}
 	}
 
@@ -216,6 +254,10 @@ class SchemaStore {
 		this.#ui.selectedTableId = null;
 		this.#ui.selectedRelationId = null;
 		this.#ui.selectedGroupId = null;
+	}
+
+	resetTransientUI() {
+		this.#ui = clonePlain(DEFAULT_UI_STATE);
 	}
 
 	startEditingTable(tableId: string | null) {

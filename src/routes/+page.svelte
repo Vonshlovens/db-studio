@@ -1,308 +1,354 @@
 <script lang="ts">
-	import { schemaStore } from '$lib/stores/schema.svelte';
-	import { sampleSchema } from '$lib/data/sample';
-	import { parseDBML, generateDBML } from '$lib/dbml';
-	import Canvas from '$lib/components/Canvas.svelte';
-	import Toolbar from '$lib/components/Toolbar.svelte';
-	import Sidebar from '$lib/components/Sidebar.svelte';
+	import { goto } from '$app/navigation';
+	import {
+		ArrowRight,
+		Database,
+		FileCode2,
+		FolderOpen,
+		LoaderCircle,
+		Pencil,
+		Plus,
+		RefreshCw,
+		Trash2
+	} from '@lucide/svelte';
+	import { onMount } from 'svelte';
+	import {
+		createDiagram,
+		deleteDiagram,
+		listDiagrams,
+		updateDiagram,
+		type DiagramSummary
+	} from '$lib/api/diagrams';
+	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
+	import * as AlertDialog from '$lib/components/ui/alert-dialog';
+	import { Button } from '$lib/components/ui/button';
+	import * as Card from '$lib/components/ui/card';
+	import * as Dialog from '$lib/components/ui/dialog';
+	import { Input } from '$lib/components/ui/input';
+	import { Skeleton } from '$lib/components/ui/skeleton';
+	import { DEFAULT_LAYOUT_STATE, DEFAULT_SCHEMA } from '$lib/types';
 
-	// Initialize with sample data
-	$effect(() => {
-		if (schemaStore.schema.tables.length === 0) {
-			schemaStore.setSchema(sampleSchema);
+	let diagrams = $state<DiagramSummary[]>([]);
+	let loading = $state(true);
+	let loadError = $state('');
+	let createOpen = $state(false);
+	let createName = $state('');
+	let creating = $state(false);
+	let createError = $state('');
+	let renameTarget = $state<DiagramSummary | null>(null);
+	let renameName = $state('');
+	let renaming = $state(false);
+	let renameError = $state('');
+	let deleteTarget = $state<DiagramSummary | null>(null);
+	let deleting = $state(false);
+
+	onMount(loadDiagrams);
+
+	function copyPlain<T>(value: T): T {
+		return JSON.parse(JSON.stringify(value)) as T;
+	}
+
+	async function loadDiagrams() {
+		loading = true;
+		loadError = '';
+		try {
+			diagrams = await listDiagrams();
+		} catch (error) {
+			loadError = error instanceof Error ? error.message : 'Could not load your diagrams.';
+		} finally {
+			loading = false;
 		}
-	});
-
-	// State for import/export modal
-	let showModal = $state(false);
-	let modalMode: 'import' | 'export' = $state('import');
-	let modalText = $state('');
-	let parseErrors = $state<string[]>([]);
-
-	// Handle actions
-	function handleImport() {
-		modalMode = 'import';
-		modalText = '';
-		parseErrors = [];
-		showModal = true;
 	}
 
-	function handleExport() {
-		modalMode = 'export';
-		modalText = generateDBML(schemaStore.schema);
-		parseErrors = [];
-		showModal = true;
+	function showCreateDialog() {
+		createName = '';
+		createError = '';
+		createOpen = true;
 	}
 
-	function handleImportConfirm() {
-		const result = parseDBML(modalText);
-		if (result.schema) {
-			schemaStore.importParseResult(result);
-			showModal = false;
-		} else {
-			parseErrors = result.errors.map(e => `Line ${e.line}: ${e.message}`);
+	async function handleCreate(event: SubmitEvent) {
+		event.preventDefault();
+		if (!createName.trim() || creating) return;
+
+		creating = true;
+		createError = '';
+		try {
+			const diagram = await createDiagram({
+				name: createName,
+				schema: copyPlain(DEFAULT_SCHEMA),
+				layout: copyPlain(DEFAULT_LAYOUT_STATE)
+			});
+			createOpen = false;
+			await goto(`/diagrams/${diagram.id}`);
+		} catch (error) {
+			createError = error instanceof Error ? error.message : 'Could not create the diagram.';
+		} finally {
+			creating = false;
 		}
 	}
 
-	function handleAddTable() {
-		const newTable = {
-			id: `table_${Date.now()}`,
-			name: `new_table_${schemaStore.schema.tables.length + 1}`,
-			columns: [
-				{ id: `col_${Date.now()}`, name: 'id', type: 'int', constraints: { pk: true, increment: true } }
-			],
-			indexes: [],
-			position: { x: 100, y: 100 }
-		};
-		schemaStore.addTable(newTable);
+	function showRenameDialog(diagram: DiagramSummary) {
+		renameTarget = diagram;
+		renameName = diagram.name;
+		renameError = '';
+	}
+
+	async function handleRename(event: SubmitEvent) {
+		event.preventDefault();
+		if (!renameTarget || !renameName.trim() || renaming) return;
+
+		renaming = true;
+		renameError = '';
+		try {
+			const updated = await updateDiagram(renameTarget.id, { name: renameName });
+			diagrams = diagrams.map((diagram) =>
+				diagram.id === updated.id
+					? {
+							id: updated.id,
+							name: updated.name,
+							createdAt: updated.createdAt,
+							updatedAt: updated.updatedAt
+						}
+					: diagram
+			);
+			renameTarget = null;
+		} catch (error) {
+			renameError = error instanceof Error ? error.message : 'Could not rename the diagram.';
+		} finally {
+			renaming = false;
+		}
+	}
+
+	async function handleDelete() {
+		if (!deleteTarget || deleting) return;
+		const id = deleteTarget.id;
+		deleting = true;
+		try {
+			await deleteDiagram(id);
+			diagrams = diagrams.filter((diagram) => diagram.id !== id);
+			deleteTarget = null;
+		} catch (error) {
+			loadError = error instanceof Error ? error.message : 'Could not delete the diagram.';
+		} finally {
+			deleting = false;
+		}
+	}
+
+	function formatUpdatedAt(value: string): string {
+		return new Intl.DateTimeFormat(undefined, {
+			month: 'short',
+			day: 'numeric',
+			year: new Date(value).getFullYear() === new Date().getFullYear() ? undefined : 'numeric',
+			hour: 'numeric',
+			minute: '2-digit'
+		}).format(new Date(value));
 	}
 </script>
 
-<div class="app">
-	<header class="header">
-		<h1 class="logo">DB Studio</h1>
+<svelte:head>
+	<title>Diagram library · DB Studio</title>
+</svelte:head>
+
+<div class="min-h-screen bg-muted/30">
+	<header class="sticky top-0 z-20 border-b bg-background/90 backdrop-blur">
+		<div class="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
+			<a class="flex items-center gap-2.5 font-semibold tracking-tight" href="/" aria-label="DB Studio home">
+				<span class="flex size-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+					<Database class="size-5" />
+				</span>
+				<span>DB Studio</span>
+			</a>
+			<ThemeToggle />
+		</div>
 	</header>
 
-	<div class="main">
-		<Sidebar
-			schema={schemaStore.schema}
-			selectedTableId={schemaStore.ui.selectedTableId}
-			onSelectTable={(id) => schemaStore.selectTable(id)}
-			onAddTable={handleAddTable}
-			onImportDBML={handleImport}
-			onExportDBML={handleExport}
-		/>
-
-		<div class="workspace">
-			<Toolbar
-				viewport={schemaStore.viewport}
-				showGrid={schemaStore.layout.showGrid}
-				onZoomIn={() => schemaStore.zoom(1.2)}
-				onZoomOut={() => schemaStore.zoom(0.8)}
-				onResetView={() => schemaStore.resetViewport()}
-				onToggleGrid={() => schemaStore.toggleGrid()}
-			/>
-
-			<div class="canvas-wrapper">
-				<Canvas
-					tables={schemaStore.schema.tables}
-					relations={schemaStore.schema.relations}
-					viewport={schemaStore.viewport}
-					selectedTableId={schemaStore.ui.selectedTableId}
-					onPan={(dx, dy) => schemaStore.pan(dx, dy)}
-					onZoom={(factor, cx, cy) => schemaStore.zoom(factor, cx, cy)}
-					onSelectTable={(id) => schemaStore.selectTable(id)}
-					onTableMove={(id, pos) => schemaStore.moveTable(id, pos)}
-				/>
+	<main class="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
+		<section class="mb-9 flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
+			<div>
+				<p class="mb-2 text-sm font-medium text-muted-foreground">Your workspace</p>
+				<h1 class="text-3xl font-semibold tracking-tight sm:text-4xl">Diagram library</h1>
+				<p class="mt-3 max-w-2xl text-muted-foreground">
+					Create and organize database diagrams, then import DBML when you are ready to design.
+				</p>
 			</div>
-		</div>
-	</div>
+			<Button size="lg" onclick={showCreateDialog}>
+				<Plus data-icon="inline-start" />
+				New diagram
+			</Button>
+		</section>
+
+		{#if loadError}
+			<div
+				class="mb-6 flex flex-col gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-4 sm:flex-row sm:items-center sm:justify-between"
+				role="alert"
+			>
+				<div>
+					<p class="font-medium text-destructive">We couldn’t load the library</p>
+					<p class="mt-1 text-sm text-muted-foreground">{loadError}</p>
+				</div>
+				<Button variant="outline" onclick={loadDiagrams}>
+					<RefreshCw data-icon="inline-start" />
+					Try again
+				</Button>
+			</div>
+		{/if}
+
+		{#if loading}
+			<div class="grid gap-5 sm:grid-cols-2 lg:grid-cols-3" aria-label="Loading diagrams">
+				{#each Array(6) as _}
+					<Card.Root>
+						<Card.Header>
+							<Skeleton class="size-11 rounded-lg" />
+							<Skeleton class="mt-4 h-5 w-2/3" />
+							<Skeleton class="h-4 w-1/2" />
+						</Card.Header>
+						<Card.Footer>
+							<Skeleton class="h-9 w-full" />
+						</Card.Footer>
+					</Card.Root>
+				{/each}
+			</div>
+		{:else if diagrams.length === 0 && !loadError}
+			<Card.Root class="border-dashed py-16 text-center">
+				<Card.Content class="mx-auto flex max-w-md flex-col items-center">
+					<div class="mb-5 flex size-14 items-center justify-center rounded-2xl bg-muted">
+						<FolderOpen class="size-7 text-muted-foreground" />
+					</div>
+					<h2 class="text-xl font-semibold">Create your first diagram</h2>
+					<p class="mt-2 text-sm leading-6 text-muted-foreground">
+						Start with a blank canvas. The editor makes it easy to paste or upload an existing DBML
+						schema.
+					</p>
+					<Button class="mt-6" onclick={showCreateDialog}>
+						<Plus data-icon="inline-start" />
+						New diagram
+					</Button>
+				</Card.Content>
+			</Card.Root>
+		{:else if diagrams.length > 0}
+			<div class="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+				{#each diagrams as diagram (diagram.id)}
+					<Card.Root class="group transition-shadow hover:shadow-md">
+						<Card.Header>
+							<div class="mb-4 flex items-start justify-between gap-3">
+								<span class="flex size-11 items-center justify-center rounded-lg bg-muted">
+									<FileCode2 class="size-5 text-muted-foreground" />
+								</span>
+								<div class="flex items-center">
+									<Button
+										variant="ghost"
+										size="icon-sm"
+										aria-label={`Rename ${diagram.name}`}
+										onclick={() => showRenameDialog(diagram)}
+									>
+										<Pencil />
+									</Button>
+									<Button
+										variant="ghost"
+										size="icon-sm"
+										class="text-muted-foreground hover:text-destructive"
+										aria-label={`Delete ${diagram.name}`}
+										onclick={() => deleteTarget = diagram}
+									>
+										<Trash2 />
+									</Button>
+								</div>
+							</div>
+							<Card.Title class="truncate" title={diagram.name}>{diagram.name}</Card.Title>
+							<Card.Description>Updated {formatUpdatedAt(diagram.updatedAt)}</Card.Description>
+						</Card.Header>
+						<Card.Footer>
+							<Button href={`/diagrams/${diagram.id}`} variant="outline" class="w-full">
+								Open diagram
+								<ArrowRight data-icon="inline-end" />
+							</Button>
+						</Card.Footer>
+					</Card.Root>
+				{/each}
+			</div>
+		{/if}
+	</main>
 </div>
 
-<!-- Import/Export Modal -->
-{#if showModal}
-	<div class="modal-overlay" onclick={() => showModal = false}>
-		<div class="modal" onclick={(e) => e.stopPropagation()}>
-			<div class="modal-header">
-				<h2>{modalMode === 'import' ? 'Import DBML' : 'Export DBML'}</h2>
-				<button class="close-btn" onclick={() => showModal = false}>×</button>
-			</div>
-
-			<div class="modal-body">
-				<textarea
-					class="dbml-textarea"
-					value={modalText}
-					oninput={(e) => modalText = e.currentTarget.value}
-					readonly={modalMode === 'export'}
-					placeholder="Paste DBML here..."
-				></textarea>
-
-				{#if parseErrors.length > 0}
-					<div class="errors">
-						{#each parseErrors as error}
-							<div class="error">{error}</div>
-						{/each}
-					</div>
+<Dialog.Root bind:open={createOpen}>
+	<Dialog.Content class="sm:max-w-md">
+		<form onsubmit={handleCreate}>
+			<Dialog.Header>
+				<Dialog.Title>New diagram</Dialog.Title>
+				<Dialog.Description>
+					Give your diagram a name. You can import DBML from the editor.
+				</Dialog.Description>
+			</Dialog.Header>
+			<div class="py-5">
+				<label for="diagram-name" class="mb-2 block text-sm font-medium">Diagram name</label>
+				<Input
+					id="diagram-name"
+					bind:value={createName}
+					maxlength={200}
+					placeholder="e.g. Customer platform"
+					autocomplete="off"
+					autofocus
+				/>
+				{#if createError}
+					<p class="mt-2 text-sm text-destructive" role="alert">{createError}</p>
 				{/if}
 			</div>
+			<Dialog.Footer>
+				<Button type="button" variant="outline" onclick={() => createOpen = false}>Cancel</Button>
+				<Button type="submit" disabled={!createName.trim() || creating}>
+					{#if creating}<LoaderCircle class="animate-spin" />{/if}
+					Create diagram
+				</Button>
+			</Dialog.Footer>
+		</form>
+	</Dialog.Content>
+</Dialog.Root>
 
-			<div class="modal-footer">
-				{#if modalMode === 'import'}
-					<button class="btn btn-primary" onclick={handleImportConfirm}>
-						Import
-					</button>
-				{:else}
-					<button
-						class="btn btn-primary"
-						onclick={() => navigator.clipboard.writeText(modalText)}
-					>
-						Copy to Clipboard
-					</button>
+<Dialog.Root open={renameTarget !== null} onOpenChange={(open) => !open && (renameTarget = null)}>
+	<Dialog.Content class="sm:max-w-md">
+		<form onsubmit={handleRename}>
+			<Dialog.Header>
+				<Dialog.Title>Rename diagram</Dialog.Title>
+				<Dialog.Description>Choose a clear name you will recognize in your library.</Dialog.Description>
+			</Dialog.Header>
+			<div class="py-5">
+				<label for="rename-diagram" class="mb-2 block text-sm font-medium">Diagram name</label>
+				<Input
+					id="rename-diagram"
+					bind:value={renameName}
+					maxlength={200}
+					autocomplete="off"
+					autofocus
+				/>
+				{#if renameError}
+					<p class="mt-2 text-sm text-destructive" role="alert">{renameError}</p>
 				{/if}
-				<button class="btn btn-secondary" onclick={() => showModal = false}>
-					Close
-				</button>
 			</div>
-		</div>
-	</div>
-{/if}
+			<Dialog.Footer>
+				<Button type="button" variant="outline" onclick={() => renameTarget = null}>Cancel</Button>
+				<Button type="submit" disabled={!renameName.trim() || renaming}>
+					{#if renaming}<LoaderCircle class="animate-spin" />{/if}
+					Save name
+				</Button>
+			</Dialog.Footer>
+		</form>
+	</Dialog.Content>
+</Dialog.Root>
 
-<style>
-	:global(body) {
-		margin: 0;
-		padding: 0;
-		font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-	}
-
-	.app {
-		display: flex;
-		flex-direction: column;
-		height: 100vh;
-		overflow: hidden;
-	}
-
-	.header {
-		height: 48px;
-		background: #1f2937;
-		color: white;
-		display: flex;
-		align-items: center;
-		padding: 0 16px;
-		flex-shrink: 0;
-	}
-
-	.logo {
-		font-size: 18px;
-		font-weight: 600;
-		margin: 0;
-	}
-
-	.main {
-		display: flex;
-		flex: 1;
-		overflow: hidden;
-	}
-
-	.workspace {
-		display: flex;
-		flex-direction: column;
-		flex: 1;
-		overflow: hidden;
-	}
-
-	.canvas-wrapper {
-		flex: 1;
-		overflow: hidden;
-		position: relative;
-	}
-
-	/* Modal Styles */
-	.modal-overlay {
-		position: fixed;
-		inset: 0;
-		background: rgba(0, 0, 0, 0.5);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		z-index: 100;
-	}
-
-	.modal {
-		background: white;
-		border-radius: 8px;
-		width: 600px;
-		max-width: 90vw;
-		max-height: 80vh;
-		display: flex;
-		flex-direction: column;
-	}
-
-	.modal-header {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		padding: 16px;
-		border-bottom: 1px solid #e5e7eb;
-	}
-
-	.modal-header h2 {
-		margin: 0;
-		font-size: 18px;
-	}
-
-	.close-btn {
-		background: none;
-		border: none;
-		font-size: 24px;
-		color: #6b7280;
-		cursor: pointer;
-	}
-
-	.modal-body {
-		padding: 16px;
-		flex: 1;
-		overflow: auto;
-	}
-
-	.dbml-textarea {
-		width: 100%;
-		height: 300px;
-		font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
-		font-size: 13px;
-		padding: 12px;
-		border: 1px solid #e5e7eb;
-		border-radius: 6px;
-		resize: none;
-	}
-
-	.errors {
-		margin-top: 12px;
-		padding: 12px;
-		background: #fef2f2;
-		border-radius: 6px;
-	}
-
-	.error {
-		color: #dc2626;
-		font-size: 13px;
-		margin-bottom: 4px;
-	}
-
-	.modal-footer {
-		display: flex;
-		justify-content: flex-end;
-		gap: 8px;
-		padding: 16px;
-		border-top: 1px solid #e5e7eb;
-	}
-
-	.btn {
-		padding: 8px 16px;
-		border-radius: 6px;
-		font-size: 13px;
-		font-weight: 500;
-		cursor: pointer;
-		transition: all 0.15s ease;
-	}
-
-	.btn-primary {
-		background: #3b82f6;
-		color: white;
-		border: none;
-	}
-
-	.btn-primary:hover {
-		background: #2563eb;
-	}
-
-	.btn-secondary {
-		background: white;
-		color: #374151;
-		border: 1px solid #e5e7eb;
-	}
-
-	.btn-secondary:hover {
-		background: #f9fafb;
-		border-color: #d1d5db;
-	}
-</style>
+<AlertDialog.Root open={deleteTarget !== null} onOpenChange={(open) => !open && (deleteTarget = null)}>
+	<AlertDialog.Content>
+		<AlertDialog.Header>
+			<AlertDialog.Title>Delete “{deleteTarget?.name}”?</AlertDialog.Title>
+			<AlertDialog.Description>
+				This permanently deletes the schema and saved layout. This action cannot be undone.
+			</AlertDialog.Description>
+		</AlertDialog.Header>
+		<AlertDialog.Footer>
+			<AlertDialog.Cancel disabled={deleting}>Cancel</AlertDialog.Cancel>
+			<AlertDialog.Action variant="destructive" disabled={deleting} onclick={handleDelete}>
+				{#if deleting}<LoaderCircle class="animate-spin" />{/if}
+				Delete diagram
+			</AlertDialog.Action>
+		</AlertDialog.Footer>
+	</AlertDialog.Content>
+</AlertDialog.Root>
