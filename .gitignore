@@ -9,6 +9,7 @@ node_modules
 .wrangler
 .svelte-kit/
 .build/
+/build/
 
 # OS
 .DS_Store
@@ -19,6 +20,11 @@ Thumbs.db
 .env.*
 !.env.example
 !.env.test
+
+# Local libSQL databases
+/data/*.db
+/data/*.db-*
+/data/*.db.*
 
 # Vite
 vite.config.js.timestamp-*

@@ -23,6 +23,7 @@ DB Studio allows users to design, visualize, and modify database schemas through
 | [Table Groups](./table-groups.md) | Grouping tables for organization |
 | [Auto Layout](./auto-layout.md) | Automatic arrangement algorithms |
 | [Theming & Appearance](./theming-appearance.md) | Light/dark mode and table colors |
+| [Diagram Persistence](./diagram-persistence.md) | Anonymous ownership, storage, and diagram API |
 
 ## User Flow
 
