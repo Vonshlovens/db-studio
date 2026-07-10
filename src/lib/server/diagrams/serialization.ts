@@ -12,6 +12,9 @@ import type {
 } from '$lib/types';
 
 const MAX_DIAGRAM_NAME_LENGTH = 200;
+const MIN_VIEWPORT_ZOOM = 0.1;
+const MAX_VIEWPORT_ZOOM = 3;
+const MAX_GRID_SIZE = 1000;
 const RELATION_TYPES = new Set(['one-to-one', 'one-to-many', 'many-to-one', 'many-to-many']);
 
 export class DiagramValidationError extends Error {
@@ -189,25 +192,98 @@ export function assertSchema(value: unknown, path = 'schema'): asserts value is 
 	assertArray(value.enums, `${path}.enums`);
 	value.enums.forEach((enumType, index) => assertEnum(enumType, `${path}.enums[${index}]`));
 	assertOptionalString(value.notes, `${path}.notes`);
+
+	const schema = value as unknown as Schema;
+	const tableIds = new Map<string, string>();
+	const columnsByTable = new Map<string, Set<string>>();
+	const columnIds = new Map<string, string>();
+	schema.tables.forEach((table, tableIndex) => {
+		const tablePath = `${path}.tables[${tableIndex}]`;
+		assertUniqueId(table.id, `${tablePath}.id`, tableIds);
+
+		const tableColumnIds = new Set<string>();
+		table.columns.forEach((column, columnIndex) => {
+			const columnPath = `${tablePath}.columns[${columnIndex}].id`;
+			assertUniqueId(column.id, columnPath, columnIds);
+			tableColumnIds.add(column.id);
+		});
+		columnsByTable.set(table.id, tableColumnIds);
+	});
+
+	const relationIds = new Map<string, string>();
+	schema.relations.forEach((relation, relationIndex) => {
+		const relationPath = `${path}.relations[${relationIndex}]`;
+		assertUniqueId(relation.id, `${relationPath}.id`, relationIds);
+		for (const endpointName of ['from', 'to'] as const) {
+			const endpoint = relation[endpointName];
+			const endpointPath = `${relationPath}.${endpointName}`;
+			const tableColumns = columnsByTable.get(endpoint.tableId);
+			if (!tableColumns) {
+				fail(`${endpointPath}.tableId`, 'must reference an existing table');
+			}
+			if (!tableColumns.has(endpoint.columnId)) {
+				fail(
+					`${endpointPath}.columnId`,
+					`must reference a column in table "${endpoint.tableId}"`
+				);
+			}
+		}
+	});
+
+	const groupIds = new Map<string, string>();
+	schema.tableGroups.forEach((group, groupIndex) => {
+		const groupPath = `${path}.tableGroups[${groupIndex}]`;
+		assertUniqueId(group.id, `${groupPath}.id`, groupIds);
+		group.tableIds.forEach((tableId, tableIndex) => {
+			if (!tableIds.has(tableId)) {
+				fail(`${groupPath}.tableIds[${tableIndex}]`, 'must reference an existing table');
+			}
+		});
+	});
+
+	const enumIds = new Map<string, string>();
+	schema.enums.forEach((enumType, enumIndex) =>
+		assertUniqueId(enumType.id, `${path}.enums[${enumIndex}].id`, enumIds)
+	);
+}
+
+function assertUniqueId(id: string, path: string, seen: Map<string, string>): void {
+	const firstPath = seen.get(id);
+	if (firstPath) fail(path, `must be unique (already used at ${firstPath})`);
+	seen.set(id, path);
 }
 
 export function assertLayoutState(
 	value: unknown,
-	path = 'layout'
+	path = 'layout',
+	tableIds?: ReadonlySet<string>
 ): asserts value is LayoutState {
 	assertRecord(value, path);
 	assertRecord(value.viewport, `${path}.viewport`);
 	assertFiniteNumber(value.viewport.x, `${path}.viewport.x`);
 	assertFiniteNumber(value.viewport.y, `${path}.viewport.y`);
 	assertFiniteNumber(value.viewport.zoom, `${path}.viewport.zoom`);
+	if (value.viewport.zoom < MIN_VIEWPORT_ZOOM || value.viewport.zoom > MAX_VIEWPORT_ZOOM) {
+		fail(
+			`${path}.viewport.zoom`,
+			`must be between ${MIN_VIEWPORT_ZOOM} and ${MAX_VIEWPORT_ZOOM}`
+		);
+	}
 
 	assertRecord(value.tablePositions, `${path}.tablePositions`);
 	for (const [tableId, position] of Object.entries(value.tablePositions)) {
-		assertPosition(position, `${path}.tablePositions.${tableId}`);
+		const positionPath = `${path}.tablePositions.${tableId}`;
+		if (tableIds && !tableIds.has(tableId)) {
+			fail(positionPath, 'must reference an existing schema table');
+		}
+		assertPosition(position, positionPath);
 	}
 
 	assertBoolean(value.showGrid, `${path}.showGrid`);
 	assertFiniteNumber(value.gridSize, `${path}.gridSize`);
+	if (value.gridSize <= 0 || value.gridSize > MAX_GRID_SIZE) {
+		fail(`${path}.gridSize`, `must be greater than 0 and at most ${MAX_GRID_SIZE}`);
+	}
 	assertBoolean(value.snapToGrid, `${path}.snapToGrid`);
 }
 
@@ -277,7 +353,7 @@ export function parseCreateDiagramInput(value: unknown): CreateDiagramInput {
 	assertRecord(value, 'body');
 	const name = normalizeDiagramName(value.name);
 	assertSchema(value.schema);
-	assertLayoutState(value.layout);
+	assertLayoutState(value.layout, 'layout', new Set(value.schema.tables.map((table) => table.id)));
 	return { name, schema: value.schema, layout: value.layout };
 }
 
@@ -293,6 +369,13 @@ export function parseUpdateDiagramInput(value: unknown, requireAll = false): Upd
 	if (value.layout !== undefined) {
 		assertLayoutState(value.layout);
 		result.layout = value.layout;
+	}
+	if (result.schema && result.layout) {
+		assertLayoutState(
+			result.layout,
+			'layout',
+			new Set(result.schema.tables.map((table) => table.id))
+		);
 	}
 
 	if (requireAll && (result.name === undefined || !result.schema || !result.layout)) {
