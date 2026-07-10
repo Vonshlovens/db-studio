@@ -1,4 +1,3 @@
-import { dev } from '$app/environment';
 import type { Handle } from '@sveltejs/kit';
 
 const OWNER_COOKIE = 'db-studio-owner';
@@ -17,7 +16,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 		event.cookies.set(OWNER_COOKIE, ownerId, {
 			httpOnly: true,
 			sameSite: 'lax',
-			secure: !dev,
+			secure: event.url.protocol === 'https:',
 			path: '/',
 			maxAge: OWNER_COOKIE_MAX_AGE
 		});

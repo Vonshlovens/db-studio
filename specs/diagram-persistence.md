@@ -7,7 +7,7 @@ Persist multiple diagrams per anonymous browser without exposing one visitor's d
 ## Ownership
 
 - The server assigns each browser an opaque UUID in the `db-studio-owner` cookie.
-- The cookie is `httpOnly`, `sameSite=lax`, available to the whole application, and `secure` outside development.
+- The cookie is `httpOnly`, `sameSite=lax`, available to the whole application, and `secure` when the effective request URL uses HTTPS.
 - Anonymous ownership is not an account or an authentication mechanism. Clearing or losing the cookie makes its diagrams inaccessible.
 - Every diagram read, update, and delete is scoped by both diagram ID and owner ID. IDs alone never grant access.
 
@@ -47,6 +47,8 @@ Create returns `201`. Missing diagrams return `404`, including IDs owned by anot
 - Development and build-time tooling default to `file:./data/db-studio.db`.
 - Production runtime and production migration commands require an explicit `DATABASE_URL`.
 - Schema changes are managed through committed Drizzle SQL migrations.
+- Deployments set the adapter's trusted `ORIGIN` so the effective request protocol, including
+  ownership-cookie security, matches the public URL.
 
 ## Non-goals
 

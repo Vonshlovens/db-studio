@@ -1,0 +1,52 @@
+x-database-environment: &database-environment
+  DATABASE_URL: ${DATABASE_URL:-file:/data/db-studio.db}
+  DATABASE_AUTH_TOKEN: ${DATABASE_AUTH_TOKEN:-}
+
+services:
+  migrate:
+    image: db-studio:local
+    build:
+      context: .
+    command: ["bun", "run", "scripts/migrate.ts"]
+    environment:
+      <<: *database-environment
+      NODE_ENV: production
+    volumes:
+      - db-data:/data
+    healthcheck:
+      disable: true
+    restart: "no"
+
+  app:
+    image: db-studio:local
+    build:
+      context: .
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *database-environment
+      NODE_ENV: production
+      ORIGIN: ${ORIGIN:-http://localhost:3000}
+      HOST: 0.0.0.0
+      PORT: "3000"
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    volumes:
+      - db-data:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bun",
+          "-e",
+          "const response = await fetch('http://127.0.0.1:3000/api/health'); if (!response.ok) process.exit(1)"
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  db-data:
