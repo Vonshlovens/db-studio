@@ -1,0 +1,10 @@
+{
+	"name": "DB Studio",
+	"install": "bash ./.cursor/install.sh",
+	"terminals": [
+		{
+			"name": "dev",
+			"command": "export PATH=\"$HOME/.bun/bin:$PATH\" && bun run dev"
+		}
+	]
+}
