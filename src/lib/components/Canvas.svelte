@@ -195,6 +195,8 @@
 						d={route.path}
 						stroke="var(--canvas-edge)"
 						stroke-width="2"
+						stroke-linejoin="round"
+						stroke-linecap="round"
 						fill="none"
 					>
 						<title>{relationLabel(relation)}</title>

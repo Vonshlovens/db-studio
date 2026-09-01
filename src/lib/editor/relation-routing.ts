@@ -103,6 +103,12 @@ function rangesOverlap(a1: number, a2: number, b1: number, b2: number): boolean 
 	return Math.min(a2, b2) - Math.max(a1, b1) > 0;
 }
 
+function polyline(points: Array<{ x: number; y: number }>): string {
+	return points
+		.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`)
+		.join(' ');
+}
+
 function buildPath(
 	start: RelationAnchor,
 	end: RelationAnchor,
@@ -125,24 +131,51 @@ function buildPath(
 		const selfRelation = fromBox.id === toBox.id;
 		const yOverlap = rangesOverlap(fromBox.top, fromBox.bottom, toBox.top, toBox.bottom);
 		if (!yOverlap || selfRelation) {
-			return `M ${x1} ${y1} H ${round(bend)} V ${y2} H ${x2}`;
+			return polyline([
+				{ x: x1, y: y1 },
+				{ x: round(bend), y: y1 },
+				{ x: round(bend), y: y2 },
+				{ x: x2, y: y2 }
+			]);
 		}
 
 		const aroundY = aroundOutsideY(fromBox, toBox, y1, y2);
-		return `M ${x1} ${y1} H ${round(bend)} V ${round(aroundY)} H ${round(toStub)} V ${y2} H ${x2}`;
+		return polyline([
+			{ x: x1, y: y1 },
+			{ x: round(bend), y: y1 },
+			{ x: round(bend), y: round(aroundY) },
+			{ x: round(toStub), y: round(aroundY) },
+			{ x: round(toStub), y: y2 },
+			{ x: x2, y: y2 }
+		]);
 	}
 
 	const hasGap = start.side === 'right' ? fromStub <= toStub : fromStub >= toStub;
 	if (hasGap) {
 		if (y1 === y2) {
-			return `M ${x1} ${y1} H ${x2}`;
+			return polyline([
+				{ x: x1, y: y1 },
+				{ x: x2, y: y2 }
+			]);
 		}
 		const midX = round((fromStub + toStub) / 2);
-		return `M ${x1} ${y1} H ${midX} V ${y2} H ${x2}`;
+		return polyline([
+			{ x: x1, y: y1 },
+			{ x: midX, y: y1 },
+			{ x: midX, y: y2 },
+			{ x: x2, y: y2 }
+		]);
 	}
 
 	const aroundY = aroundOutsideY(fromBox, toBox, y1, y2);
-	return `M ${x1} ${y1} H ${round(fromStub)} V ${round(aroundY)} H ${round(toStub)} V ${y2} H ${x2}`;
+	return polyline([
+		{ x: x1, y: y1 },
+		{ x: round(fromStub), y: y1 },
+		{ x: round(fromStub), y: round(aroundY) },
+		{ x: round(toStub), y: round(aroundY) },
+		{ x: round(toStub), y: y2 },
+		{ x: x2, y: y2 }
+	]);
 }
 
 function aroundOutsideY(fromBox: TableBox, toBox: TableBox, y1: number, y2: number): number {
@@ -209,7 +242,7 @@ export function getRelationRoute(
 }
 
 function pathPoints(path: string): Array<{ x: number; y: number }> {
-	const commands = [...path.matchAll(/[MVH][\d.\s-]+/g)].map((match) => match[0].trim());
+	const commands = [...path.matchAll(/[MVLH][\d.\s-]+/g)].map((match) => match[0].trim());
 	const points: Array<{ x: number; y: number }> = [];
 	let x = 0;
 	let y = 0;
@@ -227,8 +260,13 @@ function pathPoints(path: string): Array<{ x: number; y: number }> {
 			x = nums[0];
 			y = nums[1];
 			points.push({ x, y });
-		} else if (kind === 'H' && nums.length >= 1) {
-			x = nums[0];
+		} else if ((kind === 'L' || kind === 'H') && nums.length >= 1) {
+			if (kind === 'L' && nums.length >= 2) {
+				x = nums[0];
+				y = nums[1];
+			} else if (kind === 'H') {
+				x = nums[0];
+			}
 			points.push({ x, y });
 		} else if (kind === 'V' && nums.length >= 1) {
 			y = nums[0];

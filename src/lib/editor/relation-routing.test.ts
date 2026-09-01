@@ -58,7 +58,7 @@ describe('relation routing', () => {
 		expect(route).not.toBeNull();
 		expect(route!.start.side).toBe('right');
 		expect(route!.end.side).toBe('right');
-		expect(route!.path).toMatch(/H \d/);
+		expect(route!.path).toMatch(/L \d/);
 		expect(routeCutsThroughTable(route!, [posts, comments])).toBe(false);
 	});
 
