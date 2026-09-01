@@ -27,7 +27,7 @@ export class DBMLGenerator {
 
 		// Generate relations (as separate Ref statements)
 		for (const relation of schema.relations) {
-			lines.push(this.generateRelation(relation));
+			lines.push(this.generateRelation(relation, schema));
 		}
 
 		// Generate table groups
@@ -104,10 +104,14 @@ export class DBMLGenerator {
 		return line;
 	}
 
-	generateRelation(relation: Relation): string {
-		// Format: Ref name { from_table.from_col > to_table.to_col }
-		const fromRef = `${relation.from.tableId}.${relation.from.columnId}`;
-		const toRef = `${relation.to.tableId}.${relation.to.columnId}`;
+	generateRelation(relation: Relation, schema: Schema): string {
+		const fromTable = schema.tables.find((table) => table.id === relation.from.tableId);
+		const toTable = schema.tables.find((table) => table.id === relation.to.tableId);
+		const fromColumn = fromTable?.columns.find((column) => column.id === relation.from.columnId);
+		const toColumn = toTable?.columns.find((column) => column.id === relation.to.columnId);
+
+		const fromRef = `${this.escapeIdentifier(fromTable?.name ?? relation.from.tableId)}.${this.escapeIdentifier(fromColumn?.name ?? relation.from.columnId)}`;
+		const toRef = `${this.escapeIdentifier(toTable?.name ?? relation.to.tableId)}.${this.escapeIdentifier(toColumn?.name ?? relation.to.columnId)}`;
 
 		let symbol: string;
 		switch (relation.type) {

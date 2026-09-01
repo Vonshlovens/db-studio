@@ -269,10 +269,9 @@ class SchemaStore {
 	// ============================================================================
 
 	#initializePositions() {
-		// Grid layout for initial positioning
 		const cols = 3;
-		const spacingX = 300;
-		const spacingY = 200;
+		const spacingX = 320;
+		const spacingY = 280;
 
 		this.#schema.tables.forEach((table, index) => {
 			if (table.position.x === 0 && table.position.y === 0) {

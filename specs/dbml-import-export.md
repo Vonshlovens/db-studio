@@ -16,6 +16,7 @@ Allow users to import existing DBML schemas and export modified schemas back to 
 
 - Parse DBML syntax into internal schema representation
 - Extract tables, columns, types, constraints, and relations
+- Inline `ref:` constraints and standalone `Ref` statements both produce relations
 - Extract table groups if defined
 - Preserve comments and annotations
 
