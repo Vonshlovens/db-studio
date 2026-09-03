@@ -4,17 +4,30 @@
  * This is a skeleton implementation that handles basic cases
  */
 
-import type { Schema, Table, Column, Relation, ParseResult, ParseError, RelationType } from '$lib/types';
+import type {
+	Column,
+	ColumnConstraints,
+	ParseError,
+	ParseResult,
+	RelationType,
+	Schema,
+	Table
+} from '$lib/types';
 
-// ============================================================================
-// Types for Parser
-// ============================================================================
-
-interface Token {
-	type: string;
-	value: string;
+interface PendingRef {
+	fromTable: string;
+	fromColumn: string;
+	toTable: string;
+	toColumn: string;
+	type: RelationType;
+	name?: string;
 	line: number;
 	column: number;
+}
+
+interface TableColumnRef {
+	table: string;
+	column: string;
 }
 
 // ============================================================================
@@ -27,6 +40,7 @@ export class DBMLParser {
 	private line: number = 1;
 	private column: number = 1;
 	private pos: number = 0;
+	private pendingRefs: PendingRef[] = [];
 
 	// ============================================================================
 	// Public API
@@ -38,6 +52,7 @@ export class DBMLParser {
 		this.line = 1;
 		this.column = 1;
 		this.pos = 0;
+		this.pendingRefs = [];
 
 		// Handle empty input
 		if (!input || input.trim().length === 0) {
@@ -90,24 +105,24 @@ export class DBMLParser {
 				const table = this.parseTable();
 				if (table) {
 					schema.tables.push(table);
-					// Extract relations from column refs
-					this.extractRelations(table, schema);
 				}
+			} else if (this.matchKeyword('Ref')) {
+				this.parseRefStatement();
 			} else if (this.matchKeyword('TableGroup')) {
-				// Skip for now - groups will be implemented later
+				this.skipUntilOpeningBrace();
 				this.skipUntilBlockEnd();
 			} else if (this.matchKeyword('Enum')) {
-				// Skip for now - enums will be implemented later
+				this.skipUntilOpeningBrace();
 				this.skipUntilBlockEnd();
 			} else if (this.matchKeyword('Project')) {
-				// Skip project metadata
+				this.skipUntilOpeningBrace();
 				this.skipUntilBlockEnd();
 			} else {
-				// Unknown content, skip line
 				this.skipLine();
 			}
 		}
 
+		this.resolvePendingRelations(schema);
 		return schema;
 	}
 
@@ -164,7 +179,22 @@ export class DBMLParser {
 				continue;
 			}
 
-			const column = this.parseColumn();
+			if (this.matchKeyword('indexes') && /^\s*\{/.test(this.input.substring(this.pos + 7))) {
+				this.advance(7);
+				this.skipWhitespace();
+				if (this.peek() === '{') this.skipUntilBlockEnd();
+				continue;
+			}
+
+			if (this.matchKeyword('note') && /^\s*[:{]/.test(this.input.substring(this.pos + 4))) {
+				this.advance(4);
+				this.skipWhitespace();
+				if (this.peek() === '{') this.skipUntilBlockEnd();
+				else this.skipLine();
+				continue;
+			}
+
+			const column = this.parseColumn(name);
 			if (column) {
 				table.columns.push(column);
 			}
@@ -180,7 +210,7 @@ export class DBMLParser {
 		return table;
 	}
 
-	private parseColumn(): Column | null {
+	private parseColumn(tableName: string): Column | null {
 		this.skipWhitespace();
 
 		// Parse column name
@@ -199,13 +229,29 @@ export class DBMLParser {
 			return null;
 		}
 
-		this.skipWhitespace();
+		this.skipSpaces();
 
-		// Parse constraints
-		const constraints = this.parseConstraints();
+		const { constraints, ref } = this.parseConstraints();
+		if (ref) {
+			this.pendingRefs.push({
+				fromTable: tableName,
+				fromColumn: name,
+				toTable: ref.table,
+				toColumn: ref.column,
+				type: ref.type,
+				line: this.line,
+				column: this.column
+			});
+		}
 
-		// Skip to end of line
-		this.skipLine();
+		this.skipSpaces();
+		if (this.peek() === '\n') {
+			this.advance(1);
+			this.line++;
+			this.column = 1;
+		} else if (this.peek() !== '}' && this.peek() !== '') {
+			this.skipLine();
+		}
 
 		return {
 			id: this.generateId('col'),
@@ -229,8 +275,7 @@ export class DBMLParser {
 
 		let type = this.input.substring(start, this.pos);
 
-		// Handle array types like varchar(255)
-		this.skipWhitespace();
+		this.skipSpaces();
 		if (this.peek() === '(') {
 			this.advance(1);
 			const paramStart = this.pos;
@@ -247,10 +292,14 @@ export class DBMLParser {
 		return type.trim();
 	}
 
-	private parseConstraints(): { pk?: boolean; notNull?: boolean; unique?: boolean; fk?: boolean } {
-		const constraints: { pk?: boolean; notNull?: boolean; unique?: boolean; fk?: boolean } = {};
+	private parseConstraints(): {
+		constraints: ColumnConstraints;
+		ref: { table: string; column: string; type: RelationType } | null;
+	} {
+		const constraints: ColumnConstraints = {};
+		let ref: { table: string; column: string; type: RelationType } | null = null;
 
-		this.skipWhitespace();
+		this.skipSpaces();
 
 		if (this.peek() === '[') {
 			this.advance(1);
@@ -258,8 +307,16 @@ export class DBMLParser {
 			while (this.peek() !== ']' && this.pos < this.input.length) {
 				this.skipWhitespace();
 
+				if (this.peek() === ',') {
+					this.advance(1);
+					continue;
+				}
+
 				const constraint = this.parseIdentifier();
-				if (!constraint) break;
+				if (!constraint) {
+					this.skipConstraintValue();
+					continue;
+				}
 
 				switch (constraint.toLowerCase()) {
 					case 'pk':
@@ -276,14 +333,25 @@ export class DBMLParser {
 					case 'unique':
 						constraints.unique = true;
 						break;
-					case 'ref':
-						// Foreign key reference - store it for relation extraction
-						constraints.fk = true;
-						this.skipUntil(']');
-						break;
 					case 'increment':
 					case 'autoincrement':
-						// Auto-increment flag
+						constraints.increment = true;
+						break;
+					case 'default':
+					case 'note':
+						this.skipWhitespace();
+						if (this.peek() === ':') this.advance(1);
+						this.skipConstraintValue();
+						break;
+					case 'ref':
+						constraints.fk = true;
+						this.skipWhitespace();
+						if (this.peek() === ':') this.advance(1);
+						this.skipWhitespace();
+						ref = this.parseInlineRef();
+						break;
+					default:
+						this.skipConstraintValue();
 						break;
 				}
 
@@ -298,12 +366,169 @@ export class DBMLParser {
 			}
 		}
 
-		return constraints;
+		return { constraints, ref };
 	}
 
-	private extractRelations(table: Table, schema: Schema) {
-		// This will be implemented to parse ref: constraints
-		// For now, relations are parsed separately
+	private parseInlineRef(): { table: string; column: string; type: RelationType } | null {
+		const type = this.parseRelationType();
+		this.skipWhitespace();
+		const target = this.parseTableColumnRef();
+		if (!target) {
+			this.addError('Expected table.column after ref');
+			return null;
+		}
+		return { table: target.table, column: target.column, type };
+	}
+
+	private parseRefStatement() {
+		this.advance(3);
+		this.skipWhitespace();
+
+		let name: string | undefined;
+		if (this.peek() !== ':' && this.peek() !== '{') {
+			name = this.parseIdentifier() || undefined;
+			this.skipWhitespace();
+		}
+
+		if (this.peek() === ':') {
+			this.advance(1);
+			this.skipWhitespace();
+			this.parseRefEndpoints(name);
+			this.skipLine();
+			return;
+		}
+
+		if (this.peek() === '{') {
+			this.advance(1);
+			while (this.pos < this.input.length && this.peek() !== '}') {
+				this.skipWhitespace();
+				if (this.peek() === '}' || this.pos >= this.input.length) break;
+				if (this.peek() === '\n' || this.peek() === '/' || this.peek() === '#') {
+					this.skipLine();
+					continue;
+				}
+				this.parseRefEndpoints(name);
+			}
+			if (this.peek() === '}') this.advance(1);
+			return;
+		}
+
+		this.addError('Expected ":" or "{" after Ref');
+		this.skipLine();
+	}
+
+	private parseRefEndpoints(name?: string) {
+		const from = this.parseTableColumnRef();
+		this.skipWhitespace();
+		const type = this.parseRelationType();
+		this.skipWhitespace();
+		const to = this.parseTableColumnRef();
+
+		if (!from || !to) {
+			this.addError('Expected Ref in the form table.column > table.column');
+			this.skipLine();
+			return;
+		}
+
+		this.pendingRefs.push({
+			fromTable: from.table,
+			fromColumn: from.column,
+			toTable: to.table,
+			toColumn: to.column,
+			type,
+			name,
+			line: this.line,
+			column: this.column
+		});
+	}
+
+	private parseRelationType(): RelationType {
+		this.skipWhitespace();
+		if (this.peek() === '<' && this.peekNext() === '>') {
+			this.advance(2);
+			return 'many-to-many';
+		}
+		if (this.peek() === '>') {
+			this.advance(1);
+			return 'many-to-one';
+		}
+		if (this.peek() === '<') {
+			this.advance(1);
+			return 'one-to-many';
+		}
+		if (this.peek() === '-') {
+			this.advance(1);
+			return 'one-to-one';
+		}
+		this.addError('Expected relationship symbol (>, <, -, <>)');
+		return 'many-to-one';
+	}
+
+	private parseTableColumnRef(): TableColumnRef | null {
+		this.skipWhitespace();
+		const first = this.parseIdentifier();
+		if (!first) return null;
+
+		const parts = [first];
+		while (this.peek() === '.') {
+			this.advance(1);
+			const next = this.parseIdentifier();
+			if (!next) break;
+			parts.push(next);
+		}
+
+		if (parts.length < 2) return null;
+		return {
+			table: parts[parts.length - 2],
+			column: parts[parts.length - 1]
+		};
+	}
+
+	private resolvePendingRelations(schema: Schema) {
+		const tablesByName = new Map<string, Table>();
+		for (const table of schema.tables) {
+			tablesByName.set(table.name, table);
+			if (table.alias) tablesByName.set(table.alias, table);
+		}
+
+		const seen = new Set<string>();
+
+		for (const pending of this.pendingRefs) {
+			const fromTable = tablesByName.get(pending.fromTable);
+			const toTable = tablesByName.get(pending.toTable);
+			if (!fromTable || !toTable) {
+				this.addWarning(
+					`Unknown table in relationship ${pending.fromTable}.${pending.fromColumn} -> ${pending.toTable}.${pending.toColumn}`,
+					pending.line,
+					pending.column
+				);
+				continue;
+			}
+
+			const fromColumn = fromTable.columns.find((column) => column.name === pending.fromColumn);
+			const toColumn = toTable.columns.find((column) => column.name === pending.toColumn);
+			if (!fromColumn || !toColumn) {
+				this.addWarning(
+					`Unknown column in relationship ${pending.fromTable}.${pending.fromColumn} -> ${pending.toTable}.${pending.toColumn}`,
+					pending.line,
+					pending.column
+				);
+				continue;
+			}
+
+			const key = `${fromTable.id}:${fromColumn.id}->${toTable.id}:${toColumn.id}:${pending.type}`;
+			if (seen.has(key)) continue;
+			seen.add(key);
+
+			fromColumn.constraints.fk = true;
+			schema.relations.push({
+				id: this.generateId('rel'),
+				name: pending.name,
+				from: { tableId: fromTable.id, columnId: fromColumn.id },
+				to: { tableId: toTable.id, columnId: toColumn.id },
+				type: pending.type
+			});
+		}
 	}
 
 	// ============================================================================
@@ -397,6 +622,17 @@ export class DBMLParser {
 		}
 	}
 
+	private skipSpaces() {
+		while (this.pos < this.input.length) {
+			const c = this.peek();
+			if (c === ' ' || c === '\t' || c === '\r') {
+				this.advance(1);
+			} else {
+				break;
+			}
+		}
+	}
+
 	private skipLine() {
 		while (this.pos < this.input.length && this.peek() !== '\n') {
 			this.advance(1);
@@ -422,8 +658,33 @@ export class DBMLParser {
 		}
 	}
 
-	private skipUntil(char: string) {
-		while (this.pos < this.input.length && this.peek() !== char) {
+	private skipUntilOpeningBrace() {
+		while (this.pos < this.input.length && this.peek() !== '{' && this.peek() !== '\n') {
+			this.advance(1);
+		}
+	}
+
+	private skipConstraintValue() {
+		this.skipWhitespace();
+		if (this.peek() === ':') {
+			this.advance(1);
+			this.skipWhitespace();
+		}
+
+		const quote = this.peek();
+		if (quote === "'" || quote === '"') {
+			this.advance(1);
+			while (this.pos < this.input.length && this.peek() !== quote) {
+				if (this.peek() === '\\') this.advance(1);
+				this.advance(1);
+			}
+			if (this.peek() === quote) this.advance(1);
+			return;
+		}
+
+		while (this.pos < this.input.length) {
+			const c = this.peek();
+			if (c === ',' || c === ']' || c === '\n') break;
 			this.advance(1);
 		}
 	}
@@ -455,6 +716,15 @@ export class DBMLParser {
 			column: this.column,
 			message,
 			type: 'error'
+		});
+	}
+
+	private addWarning(message: string, line = this.line, column = this.column) {
+		this.errors.push({
+			line,
+			column,
+			message,
+			type: 'warning'
 		});
 	}
 

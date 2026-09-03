@@ -50,11 +50,11 @@ Provide an interactive canvas where users can view, arrange, and modify their da
 
 - Lines connecting foreign key columns to referenced columns
 - Crow's foot notation for cardinality
-- Different line styles for relation types
+- Orthogonal routing that stays on table edges and avoids cutting through connected tables
 
 ### Routing
 
-- Automatic path finding to avoid overlapping tables
+- Orthogonal routing along table edges; lines do not cut through connected tables
 - Bezier curves or orthogonal lines (user preference)
 - Anchor points on table edges
 

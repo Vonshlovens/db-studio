@@ -1,4 +1,11 @@
 <script lang="ts">
+	import {
+		getTableHeight,
+		TABLE_COLUMN_HEIGHT,
+		TABLE_COLUMN_START_Y,
+		TABLE_HEADER_HEIGHT,
+		TABLE_WIDTH
+	} from '$lib/editor/table-geometry';
 	import type { Table } from '$lib/types';
 
 	interface Props {
@@ -50,8 +57,8 @@
 	<rect
 		x="0"
 		y="0"
-		width="220"
-		height="{(table.columns.length + 1) * 28 + 16}"
+		width={TABLE_WIDTH}
+		height={getTableHeight(table.columns.length)}
 		fill="var(--canvas-card)"
 		stroke={selected ? 'var(--ring)' : table.color ?? 'var(--border)'}
 		stroke-width={selected ? '2' : '1'}
@@ -62,8 +69,8 @@
 	<rect
 		x="0"
 		y="0"
-		width="220"
-		height="36"
+		width={TABLE_WIDTH}
+		height={TABLE_HEADER_HEIGHT}
 		fill={selected
 			? 'var(--canvas-card-selected)'
 			: table.color
@@ -76,7 +83,7 @@
 
 	<!-- Table name -->
 	<text
-		x="110"
+		x={TABLE_WIDTH / 2}
 		y="24"
 		text-anchor="middle"
 		font-weight="600"
@@ -89,7 +96,7 @@
 
 	<!-- Columns -->
 	{#each table.columns as column, i}
-		<g transform="translate(8, {44 + i * 28})">
+		<g transform="translate(8, {TABLE_COLUMN_START_Y + i * TABLE_COLUMN_HEIGHT})">
 			<!-- Key icons -->
 			<text
 				x="0"
