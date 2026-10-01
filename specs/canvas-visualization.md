@@ -9,9 +9,19 @@ Provide an interactive canvas where users can view, arrange, and modify their da
 ### Viewport
 
 - Infinite canvas with pan and zoom
-- Minimap for navigation (optional)
+- Compact minimap in the bottom-right corner when the schema contains tables
 - Zoom controls: scroll wheel, pinch, buttons
 - Pan: click-drag on empty space, or hold space + drag
+
+### Minimap
+
+- Shows table-card bounds using the same dimensions as the canvas, with the current viewport highlighted
+- Fits the union of tables and the current viewport with padding and preserved aspect ratio; supports negative coordinates and off-schema panning
+- Updates on pan, zoom, canvas resize, table movement, and column changes
+- Clicking any overview location centers the canvas there without changing zoom or selection
+- Focusable navigation control: arrow keys pan by one quarter of the visible canvas
+- Minimap pointer, keyboard, and wheel events do not start canvas dragging or zooming
+- Hidden for empty schemas; does not persist separate navigation state
 
 ### Grid & Snapping
 

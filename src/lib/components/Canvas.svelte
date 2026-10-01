@@ -3,6 +3,7 @@
 	import { getRelationRoute } from '$lib/editor/relation-routing';
 	import type { Table, Relation, Position, ViewportState } from '$lib/types';
 	import TableCard from './TableCard.svelte';
+	import Minimap from './Minimap.svelte';
 
 	interface Props {
 		tables: Table[];
@@ -34,6 +35,8 @@
 
 	// SVG element reference
 	let svgElement: SVGSVGElement;
+	let canvasWidth = $state(0);
+	let canvasHeight = $state(0);
 
 	// Drag state
 	let isDragging = $state(false);
@@ -144,6 +147,8 @@
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions a11y_no_noninteractive_tabindex -->
 <div
 	class="canvas-container"
+	bind:clientWidth={canvasWidth}
+	bind:clientHeight={canvasHeight}
 	onmousedown={handleCanvasMouseDown}
 	onmousemove={handleMouseMove}
 	onmouseup={handleMouseUp}
@@ -224,10 +229,14 @@
 			{/each}
 		</g>
 	</svg>
+	{#if tables.length > 0 && canvasWidth > 0 && canvasHeight > 0}
+		<Minimap {tables} {viewport} width={canvasWidth} height={canvasHeight} {onPan} />
+	{/if}
 </div>
 
 <style>
 	.canvas-container {
+		position: relative;
 		width: 100%;
 		height: 100%;
 		overflow: hidden;

@@ -51,7 +51,7 @@
 - [ ] Table groups with visual containers
 - [ ] Table color customization
 - [ ] Inline table/column editing
-- [ ] Minimap for large schemas
+- [x] Minimap for large schemas (table bounds, viewport highlight, click-to-center, keyboard pan)
 - [ ] Undo/redo system
 - [ ] Context menus
 - [ ] Copy/paste tables
